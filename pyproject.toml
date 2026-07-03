@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voronoi-core"
+version = "0.5.0"
+description = "基于 JAX 的高性能 Voronoi 场计算库"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+
+dependencies = [
+    "jax>=0.4.0",
+    "jaxlib>=0.4.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib>=3.7.0"]
+dev = ["pytest>=7.0", "matplotlib>=3.7.0"]
+
+[tool.setuptools]
+py-modules = ["density", "distances", "field", "utils"]

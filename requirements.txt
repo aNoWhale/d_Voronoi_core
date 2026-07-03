@@ -1,0 +1,9 @@
+# Voronoi Core 依赖
+
+# 核心依赖
+jax>=0.4.0
+jaxlib>=0.4.0
+numpy>=1.24.0
+
+# 可选依赖（用于可视化和工具函数）
+matplotlib>=3.7.0
