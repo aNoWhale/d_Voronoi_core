@@ -10,26 +10,30 @@
 import jax.numpy as np
 
 
-def soft_density(distances: np.ndarray, beta: float) -> np.ndarray:
+def soft_density(distances: np.ndarray, beta: float, temperature: float = 1.0) -> np.ndarray:
     """
     软 Voronoi 密度
 
     rho = 1 - sum(soft_i^beta)
-    其中 soft_i = exp(-d_i) / sum(exp(-d_j))
+    其中 soft_i = exp(-d_i/T) / sum(exp(-d_j/T))
 
     Args:
         distances: 距离数组，形状 (..., N)
-        beta: 边界锐度，值越大边界越锐利
+        beta: 边界锐度，保持在 2 或 2.66 附近（控制密度幂次）
+        temperature: 温度系数 T（控制 softmax 锐度）
+            - T < 1: 分布更集中，边界更锐利
+            - T > 1: 分布更分散，边界更平滑
+            - T = 1: 标准 softmax
 
     Returns:
         密度值，形状 (...)
     """
-    exp_dist = np.exp(-distances)
+    exp_dist = np.exp(-distances / temperature)
     soft = exp_dist / np.sum(exp_dist, axis=-1, keepdims=True)
     return 1.0 - np.sum(soft ** beta, axis=-1)
 
 
-def soft_density_with_eta(distances: np.ndarray, beta: float, eta: float) -> np.ndarray:
+def soft_density_with_eta(distances: np.ndarray, beta: float, eta: float, temperature: float = 1.0) -> np.ndarray:
     """
     带 eta 补充项的软密度
 
@@ -37,13 +41,14 @@ def soft_density_with_eta(distances: np.ndarray, beta: float, eta: float) -> np.
 
     Args:
         distances: 距离数组，形状 (..., N)
-        beta: 边界锐度
+        beta: 边界锐度（保持在 2 或 2.66 附近）
         eta: 补充项
+        temperature: 温度系数 T（控制 softmax 锐度）
 
     Returns:
         密度值，形状 (...)
     """
-    exp_dist = np.exp(-distances)
+    exp_dist = np.exp(-distances / temperature)
     eta_term = np.full_like(exp_dist[..., :1], eta)
     exp_dist_with_eta = np.concatenate([exp_dist, eta_term], axis=-1)
     soft = exp_dist_with_eta / np.sum(exp_dist_with_eta, axis=-1, keepdims=True)
