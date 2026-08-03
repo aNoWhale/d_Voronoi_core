@@ -112,14 +112,19 @@ def voronoi_field(
         padding = padded_size - n_units
         padded = np.pad(flat_coords, ((0, padding), (0, 0)))
         batched = padded.reshape(n_batches, effective_batch, -1)
+        # pmap 映射 axis 0，所以 num_devices 必须在 axis 0
         device_coords = batched.reshape(n_batches, num_devices, batch_size, -1)
+        device_coords = device_coords.transpose(1, 0, 2, 3)  # (num_devices, n_batches, batch_size, dim)
 
         def process_device(batch):
             return vectorized(batch, seeds, D, cp)
 
         pmap_fn = jax.pmap(process_device)
         results = pmap_fn(device_coords)
-        return results.reshape(-1)[:n_units].reshape(original_shape)
+        # results 形状: (num_devices, n_batches, batch_size)
+        # 恢复原来的顺序并展平
+        results = results.transpose(1, 0, 2).reshape(-1)[:n_units]
+        return results.reshape(original_shape)
 
 
 # =============================================================================
