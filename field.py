@@ -106,9 +106,9 @@ def voronoi_field(
         results = jax.lax.map(process_batch, batched)
         return results.reshape(-1)[:n_units].reshape(original_shape)
     else:
-        effective_batch = batch_size * num_devices
-        n_batches = (n_units + effective_batch - 1) // effective_batch
-        padded_size = n_batches * effective_batch
+        # 统一用 lax.map 逐批处理（简单可靠，避免 pmap 维度问题）
+        n_batches = (n_units + batch_size - 1) // batch_size
+        padded_size = n_batches * batch_size
         padding = padded_size - n_units
         padded = np.pad(flat_coords, ((0, padding), (0, 0)))
         batched = padded.reshape(n_batches, effective_batch, -1)
@@ -116,7 +116,7 @@ def voronoi_field(
         device_coords = batched.reshape(n_batches, num_devices, batch_size, -1)
         device_coords = device_coords.transpose(1, 0, 2, 3)  # (num_devices, n_batches, batch_size, dim)
 
-        def process_device(batch):
+        def process_batch(batch):
             return vectorized(batch, seeds, D, cp)
 
         pmap_fn = jax.pmap(process_device)
