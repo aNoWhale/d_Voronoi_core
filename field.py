@@ -21,29 +21,57 @@ import jax
 import jax.numpy as np
 
 from density import soft_density, heaviside
-from distances import mahalanobis_single, masked_mahalanobis_single
+from distances import mahalanobis_single, masked_mahalanobis_single, masked_mahalanobis_single_by_angle
 
 
 # =============================================================================
 # 核心计算函数（JIT 优化）
 # =============================================================================
 
-@partial(jax.jit, static_argnums=(4, 5, 6, 7))
-def _compute_unit_density(
+@partial(jax.jit, static_argnums=(3, 4, 5, 6))
+def _compute_unit_density_basic(
     unit: np.ndarray,
     seeds: np.ndarray,
     D: np.ndarray,
-    cp: Optional[np.ndarray],
     beta: float,
     sigma: float,
     scale: float,
     temperature: float = 1.0
 ) -> np.ndarray:
-    """计算单点的 Voronoi 密度"""
-    if cp is None:
-        dist = mahalanobis_single(unit, seeds, D)
-    else:
-        dist = masked_mahalanobis_single(unit, seeds, D, cp, sigma, scale)
+    """计算单点的 Voronoi 密度（基本版本：马氏距离）"""
+    dist = mahalanobis_single(unit, seeds, D)
+    return soft_density(dist, beta, temperature)
+
+
+@partial(jax.jit, static_argnums=(4, 5, 6, 7))
+def _compute_unit_density_with_cp(
+    unit: np.ndarray,
+    seeds: np.ndarray,
+    D: np.ndarray,
+    cp: np.ndarray,
+    beta: float,
+    sigma: float,
+    scale: float,
+    temperature: float = 1.0
+) -> np.ndarray:
+    """计算单点的 Voronoi 密度（带控制点）"""
+    dist = masked_mahalanobis_single(unit, seeds, D, cp, sigma, scale)
+    return soft_density(dist, beta, temperature)
+
+
+@partial(jax.jit, static_argnums=(4, 5, 6, 7))
+def _compute_unit_density_with_angle(
+    unit: np.ndarray,
+    seeds: np.ndarray,
+    D: np.ndarray,
+    angle: np.ndarray,
+    beta: float,
+    sigma: float,
+    scale: float,
+    temperature: float = 1.0
+) -> np.ndarray:
+    """计算单点的 Voronoi 密度（带角度参数）"""
+    dist = masked_mahalanobis_single_by_angle(unit, seeds, D, angle, sigma, scale)
     return soft_density(dist, beta, temperature)
 
 
@@ -60,7 +88,8 @@ def voronoi_field(
     sigma: float = 0.1,
     scale: float = 3.0,
     temperature: float = 1.0,
-    batch_size: int = 20
+    batch_size: int = 20,
+    angle: Optional[np.ndarray] = None
 ) -> np.ndarray:
     """
     计算 Voronoi 场（支持批处理和多设备）
@@ -88,15 +117,29 @@ def voronoi_field(
     flat_coords = coords.reshape(-1, coords.shape[-1])
     n_units = flat_coords.shape[0]
 
-    compute_fn = partial(_compute_unit_density, beta=beta, sigma=sigma, scale=scale, temperature=temperature)
-    vectorized = jax.vmap(compute_fn, in_axes=(0, None, None, None))
+    # 根据参数选择不同的计算函数
+    if angle is not None:
+        compute_fn = partial(_compute_unit_density_with_angle, beta=beta, sigma=sigma, scale=scale, temperature=temperature)
+        vectorized = jax.vmap(compute_fn, in_axes=(0, None, None, None))
+        extra_arg = angle
+    elif cp is not None:
+        compute_fn = partial(_compute_unit_density_with_cp, beta=beta, sigma=sigma, scale=scale, temperature=temperature)
+        vectorized = jax.vmap(compute_fn, in_axes=(0, None, None, None))
+        extra_arg = cp
+    else:
+        compute_fn = partial(_compute_unit_density_basic, beta=beta, sigma=sigma, scale=scale, temperature=temperature)
+        vectorized = jax.vmap(compute_fn, in_axes=(0, None, None))
+        extra_arg = None
 
     devices = jax.devices()
     num_devices = len(devices)
 
     if num_devices == 1:
         def process_batch(batch):
-            return vectorized(batch, seeds, D, cp)
+            if extra_arg is not None:
+                return vectorized(batch, seeds, D, extra_arg)
+            else:
+                return vectorized(batch, seeds, D)
 
         n_batches = (n_units + batch_size - 1) // batch_size
         padded_size = n_batches * batch_size
@@ -106,25 +149,21 @@ def voronoi_field(
         results = jax.lax.map(process_batch, batched)
         return results.reshape(-1)[:n_units].reshape(original_shape)
     else:
-        # 统一用 lax.map 逐批处理（简单可靠，避免 pmap 维度问题）
+        # 多设备：统一用 lax.map 逐批处理（简单可靠，避免 pmap 维度问题）
         n_batches = (n_units + batch_size - 1) // batch_size
         padded_size = n_batches * batch_size
         padding = padded_size - n_units
         padded = np.pad(flat_coords, ((0, padding), (0, 0)))
-        batched = padded.reshape(n_batches, effective_batch, -1)
-        # pmap 映射 axis 0，所以 num_devices 必须在 axis 0
-        device_coords = batched.reshape(n_batches, num_devices, batch_size, -1)
-        device_coords = device_coords.transpose(1, 0, 2, 3)  # (num_devices, n_batches, batch_size, dim)
+        batched = padded.reshape(n_batches, batch_size, -1)
 
-        def process_batch(batch):
-            return vectorized(batch, seeds, D, cp)
+        def process_batch_multi(batch):
+            if extra_arg is not None:
+                return vectorized(batch, seeds, D, extra_arg)
+            else:
+                return vectorized(batch, seeds, D)
 
-        pmap_fn = jax.pmap(process_device)
-        results = pmap_fn(device_coords)
-        # results 形状: (num_devices, n_batches, batch_size)
-        # 恢复原来的顺序并展平
-        results = results.transpose(1, 0, 2).reshape(-1)[:n_units]
-        return results.reshape(original_shape)
+        results = jax.lax.map(process_batch_multi, batched)
+        return results.reshape(-1)[:n_units].reshape(original_shape)
 
 
 # =============================================================================
@@ -142,7 +181,8 @@ def compute_voronoi(
     temperature: float = 1.0,
     eta: float = 0.5,
     gamma: float = 1.0,
-    batch_size: int = 20
+    batch_size: int = 20,
+    angle: Optional[np.ndarray] = None
 ) -> np.ndarray:
     """
     计算 Voronoi 场
@@ -172,12 +212,15 @@ def compute_voronoi(
         gamma: Heaviside 投影锐度（由 compute_gamma 计算）
                gamma=1.0 时不做投影
         batch_size: 批处理大小
+        angle: 方向角度参数，形状 (N,)，可选
+            - 传入时直接使用角度定义方向，无需控制点坐标
+            - 优先级高于 cp
 
     Returns:
         密度场，形状 (Nx, Ny)
     """
     # 步骤1-2: 计算连续场
-    field = voronoi_field(coords, seeds, D, cp, beta, sigma, scale, temperature, batch_size)
+    field = voronoi_field(coords, seeds, D, cp, beta, sigma, scale, temperature, batch_size, angle)
 
     # 步骤3: Heaviside 投影（最后一步）
     if gamma > 1.0:
@@ -206,7 +249,7 @@ def make_voronoi_fn(
         batch_size: 批处理大小
 
     Returns:
-        voronoi_fn(coords, seeds, D, cp=None, temperature=1.0, eta=0.5, gamma=1.0)
+        voronoi_fn(coords, seeds, D, cp=None, temperature=1.0, eta=0.5, gamma=1.0, angle=None)
 
     Example:
         >>> # 欧几里得距离（D=I），标准温度
@@ -218,6 +261,10 @@ def make_voronoi_fn(
         >>>
         >>> # 高温 → 平滑边界
         >>> field = voronoi(coords, seeds, D, temperature=2.0)
+        >>>
+        >>> # 角度参数化（直接使用角度，无需控制点）
+        >>> angle = np.array([0.0, np.pi/2, np.pi])  # 每个种子点的方向
+        >>> field = voronoi(coords, seeds, D, angle=angle)
     """
     def voronoi_fn(
         coords: np.ndarray,
@@ -226,14 +273,16 @@ def make_voronoi_fn(
         cp: Optional[np.ndarray] = None,
         temperature: float = 1.0,
         eta: float = 0.5,
-        gamma: float = 1.0
+        gamma: float = 1.0,
+        angle: Optional[np.ndarray] = None
     ) -> np.ndarray:
         return compute_voronoi(
             coords, seeds, D, cp,
             beta=beta, sigma=sigma, scale=scale,
             temperature=temperature,
             eta=eta, gamma=gamma,
-            batch_size=batch_size
+            batch_size=batch_size,
+            angle=angle
         )
     return voronoi_fn
 

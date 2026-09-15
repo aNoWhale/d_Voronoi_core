@@ -124,3 +124,56 @@ def masked_mahalanobis_single(
     direction_weight = 1.0 / (1.0 + np.exp(-0.1 * (norm_sc - norm_sx)))
 
     return (mask ** direction_weight) * d_mahal
+
+
+def masked_mahalanobis_single_by_angle(
+    unit: np.ndarray,
+    seeds: np.ndarray,
+    D: np.ndarray,
+    angle: np.ndarray,
+    sigma: float,
+    scale: float,
+    eps: float = 1e-9
+) -> np.ndarray:
+    """
+    单点到多种子的带遮罩马氏距离（角度参数化版本）
+
+    直接使用角度参数定义方向，无需控制点坐标。
+    方向向量 = [cos(angle), sin(angle)]
+
+    Args:
+        unit: 单个场点，形状 (dim,)
+        seeds: 种子点坐标，形状 (N, dim)
+        D: 变换矩阵，形状 (N, dim, dim)
+        angle: 方向角度，形状 (N,)，弧度
+        sigma: 遮罩宽度
+        scale: 遮罩强度
+        eps: 数值稳定性常数
+
+    Returns:
+        距离向量，形状 (N,)
+    """
+    # 马氏距离
+    d_mahal = mahalanobis_single(unit, seeds, D)
+
+    # 方向向量：从角度直接计算
+    direction = np.stack([np.cos(angle), np.sin(angle)], axis=-1)  # (N, 2)
+
+    # 方向计算
+    diff_sx = unit - seeds  # seed -> unit
+
+    # 余弦相似度（使用方向向量而非 cp 坐标）
+    dot = np.sum(direction * diff_sx, axis=-1)
+    norm_dir = np.linalg.norm(direction, axis=-1) + eps  # ≈ 1，但保持通用
+    norm_sx = np.linalg.norm(diff_sx, axis=-1) + eps
+    cos_theta = np.abs(dot / (norm_dir * norm_sx))
+
+    # 遮罩
+    mask = scale * np.exp(-0.5 * ((cos_theta - 1.0) / sigma) ** 2) + 1.0
+
+    # 方向衰减（使用固定参考距离，避免半径概念）
+    # 使用单位距离作为参考
+    ref_dist = 1.0
+    direction_weight = 1.0 / (1.0 + np.exp(-0.1 * (ref_dist - norm_sx)))
+
+    return (mask ** direction_weight) * d_mahal

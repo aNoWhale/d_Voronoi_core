@@ -20,8 +20,10 @@ from distances import (
     mahalanobis,
     masked_mahalanobis,
     mahalanobis_single,
-    masked_mahalanobis_single
+    masked_mahalanobis_single,
+    masked_mahalanobis_single_by_angle
 )
+
 from field import (
     compute_voronoi,
     voronoi_field,
@@ -33,7 +35,9 @@ from utils import (
     generate_identity_D,
     interpolate_field,
     compute_field_gradient,
-    find_boundary
+    find_boundary,
+    angles_to_cp,
+    D_params_to_matrix
 )
 
 __version__ = "0.5.0"
@@ -50,6 +54,7 @@ __all__ = [
     "masked_mahalanobis",
     "mahalanobis_single",
     "masked_mahalanobis_single",
+    "masked_mahalanobis_single_by_angle",
 
     # 场计算
     "compute_voronoi",
@@ -63,4 +68,6 @@ __all__ = [
     "interpolate_field",
     "compute_field_gradient",
     "find_boundary",
+    "angles_to_cp",
+    "D_params_to_matrix",
 ]
