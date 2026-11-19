@@ -5,7 +5,7 @@
 ## 快速索引
 
 - **核心函数**：[compute_voronoi](#compute_voronoi) | [make_voronoi_fn](#make_voronoi_fn) | [make_optimizer_fn](#make_optimizer_fn)
-- **密度计算**：[soft_density](#soft_density) | [heaviside](#heaviside)
+- **密度计算**：[soft_density](#soft_density) | [soft_density_grouped](#soft_density_groupeddistances-seeds-beta-temperature-group2-delta0none-epsnone) | [heaviside](#heaviside)
 - **距离计算**：[mahalanobis](#mahalanobis) | [masked_mahalanobis](#masked_mahalanobis)
 - **工具函数**：[generate_identity_D](#generate_identity_D) | [compute_field_gradient](#compute_field_gradient)
 - **关键概念**：[开胞/闭胞转换](#开胞闭胞转换) | [方向敏感 Voronoi](#方向敏感-voronoi)
@@ -90,6 +90,66 @@ rho = 1 - sum(soft_i^beta)
 - 在 softmax 分母中添加一个常数 `eta` 项
 - 这会略微降低所有种子点的 softmax 权重
 - 用于调整边界行为
+
+---
+
+#### `soft_density_grouped(distances, seeds, beta, temperature, group=2, delta0=None, eps=None)`
+
+**功能：** 带**分组融合**的软密度。把间距小于 `delta0` 的种子组视为同一特征
+（距离场取并集），从而消除"两颗种子靠得太近 → 一整块实心材料"的退化。
+
+**为什么需要它：** `soft_density` 里的 `rho` 并不是覆盖率，而是**竞争者个数**的函数
+
+```
+sum_i soft_i^2 = 1/N_eff ,  N_eff = 1/sum_i soft_i^2 ,  rho = 1 - N_eff^(1-beta)
+```
+
+- 1 颗主导 → `rho = 0`
+- 2 颗等距 → `rho = 0.5`（`eta = 0.5` 时正好出材料）
+- M 颗挤在 ~2T 以内 → `rho → 1`（整块）
+
+该退化对任何单调重标定 `g(d)` 都不变（`N_eff` 不变），因此只能从"求和项数"上治。
+
+**数学公式：**
+
+```
+A_g = sum_{i in g} soft_i^beta                  # 分开算（原式）
+B_g = ( sum_{i in g} soft_i )^beta              # 并集算（组权重可加）
+C_g = (1 - w_g) * A_g + w_g * B_g
+rho = 1 - sum_g C_g
+
+w_g = sigmoid( (delta0 - R_g) / eps )
+R_g = sqrt( mean_{i<j in g} |s_i - s_j|^2 )     # 组内 RMS 互距
+```
+
+并集恒等式：`d_{A∪B} = min(d_A, d_B)` ⇔ `w_{A∪B} = soft_A + soft_B`。两子重合时
+`soft_i + soft_j = 1` ⇒ `C_g = 1` ⇒ `rho = 0`（组内无材料），而组与外部交界仍是
+`rho = 0.5` 的正常壁。
+
+**参数：**
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `distances` | (..., N) | 场点到各种子的距离 |
+| `seeds` | (N, dim) | 种子坐标，仅用于算融合权重 |
+| `group` | int | 每组种子数，必须整除 N；`1` 退化为 `soft_density` |
+| `delta0` | float | 融合尺度，缺省 `2*temperature` |
+| `eps` | float | 过渡软硬，缺省 `0.4*temperature` |
+
+**实现细节：**
+- **固定索引分组**（不随迭代变化）——这是整条链保持 C^∞ 的前提；数据驱动的动态
+  聚类会在阈值处跳变。
+- 用 RMS 互距而非 `max`、用求和而非 soft-min：`max/min` 在一阶有折点，而求和与
+  `sigmoid` 都解析，**组内两颗种子都拿到非零梯度**（硬 `min` 会让较远那颗梯度
+  恒为 0，成为自由漂移的死变量）。
+- `w_g = 0` 时与原式**逐位一致**（实测 `max|Δrho| = 1.2e-7`，float32 精度）。
+
+**相关函数：** `fusion_weight(seeds, group, delta0, eps)` 只返回每组权重 `(G,)`；
+`soft_density_fused(distances, beta, temperature, weight, group)` 接受外部给定的权重。
+演示与自检：`python demo/demo_fusion.py`。
+
+**实测（demo）：** 两颗种子间距 0.0015 ≪ δ0 时，连线中点的 `rho` 由 `0.485`
+（原式，η=0.5 出材料）降到 `0.010`（融合，无材料）；规则点阵下两式
+`max|Δrho| = 6e-8`。
 
 ---
 

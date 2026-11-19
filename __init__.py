@@ -13,6 +13,10 @@ Voronoi Core 模块
 from density import (
     soft_density,
     soft_density_with_eta,
+    soft_density_fused,
+    soft_density_grouped,
+    fusion_weight,
+    group_ids,
     compute_gamma,
     heaviside
 )
@@ -40,12 +44,16 @@ from utils import (
     D_params_to_matrix
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     # 密度计算
     "soft_density",
     "soft_density_with_eta",
+    "soft_density_fused",
+    "soft_density_grouped",
+    "fusion_weight",
+    "group_ids",
     "compute_gamma",
     "heaviside",
 
