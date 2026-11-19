@@ -89,7 +89,8 @@ def voronoi_field(
     scale: float = 3.0,
     temperature: float = 1.0,
     batch_size: int = 20,
-    angle: Optional[np.ndarray] = None
+    angle: Optional[np.ndarray] = None,
+    topk: int = 0                     # >0 时启用 top-k (角度遮罩仅算最近 k 种子)
 ) -> np.ndarray:
     """
     计算 Voronoi 场（支持批处理和多设备）
@@ -118,7 +119,13 @@ def voronoi_field(
     n_units = flat_coords.shape[0]
 
     # 根据参数选择不同的计算函数
-    if angle is not None:
+    if angle is not None and topk > 0:
+        # top-k 模式: 角度遮罩仅作用于最近 k 种子 (省内存)
+        compute_fn = partial(_compute_unit_density_topk, beta=beta, sigma=sigma,
+                             scale=scale, temperature=temperature, k=topk)
+        vectorized = jax.vmap(compute_fn, in_axes=(0, None, None, None))
+        extra_arg = angle
+    elif angle is not None:
         compute_fn = partial(_compute_unit_density_with_angle, beta=beta, sigma=sigma, scale=scale, temperature=temperature)
         vectorized = jax.vmap(compute_fn, in_axes=(0, None, None, None))
         extra_arg = angle
@@ -182,7 +189,8 @@ def compute_voronoi(
     eta: float = 0.5,
     gamma: float = 1.0,
     batch_size: int = 20,
-    angle: Optional[np.ndarray] = None
+    angle: Optional[np.ndarray] = None,
+    topk: int = 0
 ) -> np.ndarray:
     """
     计算 Voronoi 场
@@ -220,7 +228,7 @@ def compute_voronoi(
         密度场，形状 (Nx, Ny)
     """
     # 步骤1-2: 计算连续场
-    field = voronoi_field(coords, seeds, D, cp, beta, sigma, scale, temperature, batch_size, angle)
+    field = voronoi_field(coords, seeds, D, cp, beta, sigma, scale, temperature, batch_size, angle, topk)
 
     # 步骤3: Heaviside 投影（最后一步）
     if gamma > 1.0:
@@ -237,7 +245,8 @@ def make_voronoi_fn(
     beta: float = 2.0,
     sigma: float = 0.1,
     scale: float = 3.0,
-    batch_size: int = 20
+    batch_size: int = 20,
+    topk: int = 0
 ) -> Callable:
     """
     创建 Voronoi 场计算函数（预绑定静态参数）
@@ -282,7 +291,8 @@ def make_voronoi_fn(
             temperature=temperature,
             eta=eta, gamma=gamma,
             batch_size=batch_size,
-            angle=angle
+            angle=angle,
+            topk=topk
         )
     return voronoi_fn
 
@@ -342,3 +352,26 @@ def make_optimizer_fn(
             batch_size=batch_size
         )
     return optimizer_fn
+
+
+# =============================================================================
+# top-k 版本 (省内存: 角度遮罩只算最近 k 个种子)
+# =============================================================================
+
+from distances import topk_mahalanobis_angle
+
+@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8))
+def _compute_unit_density_topk(
+    unit: np.ndarray,
+    seeds: np.ndarray,
+    D: np.ndarray,
+    angle: np.ndarray,
+    beta: float,
+    sigma: float,
+    scale: float,
+    temperature: float = 1.0,
+    k: int = 10
+) -> np.ndarray:
+    """top-k Voronoi 密度 (角度遮罩仅作用于最近 k 种子)"""
+    dist = topk_mahalanobis_angle(unit, seeds, D, angle, sigma, scale, k)
+    return soft_density(dist, beta, temperature)

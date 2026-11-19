@@ -7,6 +7,7 @@
 - soft: softmax 归一化后的距离
 """
 
+import jax
 import jax.numpy as np
 
 
@@ -28,7 +29,15 @@ def soft_density(distances: np.ndarray, beta: float, temperature: float = 1.0) -
     Returns:
         密度值，形状 (...)
     """
-    exp_dist = np.exp(-distances / temperature)
+    # run47 数值稳定修复 (2026-10-09): softmax 平移不变性 — 减去最小距离后
+    # exp 输入恒 ≤0, 分母 s 恒 ≥1, 永不下溢。
+    # 旧版 exp(-d/T) 在 T=0.002 下: 最近种子距离 d>0.0888 时 s<5.4e-20,
+    # 反向 1/s² 溢出 float32 → inf×0 → nan (CPU 复现 0.085✓/0.090✗ 与
+    # 理论破界 0.0888 精确吻合); d≥0.176 时 exp 归零, 前向 0/0 也 nan。
+    # 平移不改变 softmax 值, 前向数学恒等; stop_gradient 截断 min 的梯度
+    # (平移量本就是辅助量, 不参与梯度)。
+    d0 = jax.lax.stop_gradient(np.min(distances, axis=-1, keepdims=True))
+    exp_dist = np.exp(-(distances - d0) / temperature)
     soft = exp_dist / np.sum(exp_dist, axis=-1, keepdims=True)
     return 1.0 - np.sum(soft ** beta, axis=-1)
 
@@ -48,7 +57,9 @@ def soft_density_with_eta(distances: np.ndarray, beta: float, eta: float, temper
     Returns:
         密度值，形状 (...)
     """
-    exp_dist = np.exp(-distances / temperature)
+    # run47: 同 soft_density — softmax 平移减最小距离, 防 1/s² 反向溢出
+    d0 = jax.lax.stop_gradient(np.min(distances, axis=-1, keepdims=True))
+    exp_dist = np.exp(-(distances - d0) / temperature)
     eta_term = np.full_like(exp_dist[..., :1], eta)
     exp_dist_with_eta = np.concatenate([exp_dist, eta_term], axis=-1)
     soft = exp_dist_with_eta / np.sum(exp_dist_with_eta, axis=-1, keepdims=True)

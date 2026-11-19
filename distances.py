@@ -13,6 +13,7 @@
 - 带遮罩马氏 = 考虑方向敏感性
 """
 
+import jax
 import jax.numpy as np
 
 
@@ -37,7 +38,8 @@ def mahalanobis(unit: np.ndarray, seed: np.ndarray, D: np.ndarray) -> np.ndarray
         np.einsum('...ijklm,...imn->...ijkln', diff, D.swapaxes(-1, -2)),
         D
     )
-    return np.sqrt(np.maximum(nor, 0.0))
+    # run47: +1e-30 防 sqrt(0) 反向 0/0=nan (种子与场点重合时)
+    return np.sqrt(np.maximum(nor, 0.0) + 1e-30)
 
 
 def masked_mahalanobis(
@@ -91,7 +93,8 @@ def mahalanobis_single(unit: np.ndarray, seeds: np.ndarray, D: np.ndarray) -> np
     """单点到多种子的马氏距离"""
     diff = seeds - unit
     transformed = np.einsum('nij,nj->ni', D, diff)
-    return np.sqrt(np.sum(transformed ** 2, axis=-1))
+    # run47: +1e-30 防 sqrt(0) 反向 0/0=nan (种子与场点精确重合时, fp32 下可触发)
+    return np.sqrt(np.sum(transformed ** 2, axis=-1) + 1e-30)
 
 
 def masked_mahalanobis_single(
@@ -177,3 +180,40 @@ def masked_mahalanobis_single_by_angle(
     direction_weight = 1.0 / (1.0 + np.exp(-0.1 * (ref_dist - norm_sx)))
 
     return (mask ** direction_weight) * d_mahal
+
+
+def topk_mahalanobis_angle(
+    unit: np.ndarray,
+    seeds: np.ndarray,
+    D: np.ndarray,
+    angle: np.ndarray,
+    sigma: float,
+    scale: float,
+    k: int = 10,
+    eps: float = 1e-9
+) -> np.ndarray:
+    """top-k 选择 + 马氏角度遮罩 (省内存版):
+    ① 用欧氏距离粗筛最近 k 种子 (无矩阵乘, 便宜)
+    ② 只对 top-k 算精确马氏 + 角度遮罩 (重量操作限于 k 个)
+    欧氏与马氏的排序误差被 k 足够大时抹除。"""
+    # ① 欧氏距离粗筛 (O(N·dim), 无矩阵乘)
+    diff = seeds - unit                                     # (N, dim)
+    dist_euclid_sq = np.sum(diff ** 2, axis=-1)             # (N,)
+    _, topk_idx = jax.lax.top_k(-dist_euclid_sq, min(k, seeds.shape[0]))
+
+    # ② top-k 精确马氏 + 角度遮罩
+    topk_seeds = seeds[topk_idx]                            # (k, dim)
+    topk_D = D[topk_idx]                                    # (k, dim, dim)
+    topk_angle = angle[topk_idx]                            # (k,)
+    diff2 = topk_seeds - unit                               # (k, dim)
+    transformed2 = np.einsum('nij,nj->ni', topk_D, diff2)  # (k, dim)
+    d2 = np.sqrt(np.sum(transformed2 ** 2, axis=-1) + eps) # (k,)
+    direction = np.stack([np.cos(topk_angle), np.sin(topk_angle)], axis=-1)
+    dot = np.sum(direction * diff2, axis=-1)
+    nd = np.linalg.norm(direction, axis=-1) + eps
+    ns = np.linalg.norm(diff2, axis=-1) + eps
+    cos_theta = np.abs(dot / (nd * ns))
+    mask = scale * np.exp(-0.5 * ((cos_theta - 1.0) / sigma) ** 2) + 1.0
+    ref_dist = 1.0
+    dw = 1.0 / (1.0 + np.exp(-0.1 * (ref_dist - ns)))
+    return (mask ** dw) * d2                                 # (k,)
