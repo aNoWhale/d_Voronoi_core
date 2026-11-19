@@ -146,7 +146,7 @@ def fusion_weight(seeds: np.ndarray, group: int, delta0: float,
     Args:
         seeds: (N, dim) 种子坐标
         group: 每组种子数 (group<=1 时全部返回 1, 即不融合)
-        delta0: 融合尺度, 建议取 2*temperature
+        delta0: 融合尺度, 建议取 6*temperature (=0.5x 配对图间距)
         eps: 过渡软硬, 建议取 0.4*temperature
 
     Returns:
@@ -200,10 +200,10 @@ def soft_density_grouped(distances: np.ndarray, seeds: np.ndarray, beta: float,
                          delta0: float = None, eps: float = None) -> np.ndarray:
     """便捷封装: 由种子坐标自动算融合权重再求密度。
 
-    delta0 缺省 2*temperature (退化尺度), eps 缺省 0.4*temperature。
+    delta0 缺省 6*temperature (≈0.5x 配对图间距; 2T 实测几乎不触发), eps 缺省 0.4*temperature。
     """
     if delta0 is None:
-        delta0 = 2.0 * temperature
+        delta0 = 6.0 * temperature
     if eps is None:
         eps = 0.4 * temperature
     if group <= 1:

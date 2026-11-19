@@ -115,7 +115,7 @@ def voronoi_field(
     angle: Optional[np.ndarray] = None,
     topk: int = 0,                    # >0 时启用 top-k (角度遮罩仅算最近 k 种子)
     group: int = 1,                   # >1 时启用分组融合 (见 density.soft_density_fused)
-    delta0: float = 0.0,              # 融合尺度, 缺省 2*temperature
+    delta0: float = 0.0,              # 融合尺度, 缺省 6*temperature (≈0.5x 格点间距)
     eps: float = 0.0                  # 过渡软硬, 缺省 0.4*temperature
 ) -> np.ndarray:
     """
@@ -137,7 +137,7 @@ def voronoi_field(
             - T = 1: 标准 softmax
         batch_size: 批处理大小
         group: 每组种子数（>1 时启用分组融合；必须整除 N）
-        delta0: 融合尺度（缺省 2*temperature）
+        delta0: 融合尺度（缺省 6*temperature ≈ 0.5×格点间距）
         eps: 过渡软硬（缺省 0.4*temperature）
 
     Returns:
@@ -256,7 +256,7 @@ def compute_voronoi(
             - 传入时直接使用角度定义方向，无需控制点坐标
             - 优先级高于 cp
         group: 每组种子数（>1 时启用分组融合）
-        delta0: 融合尺度（缺省 2*temperature）
+        delta0: 融合尺度（缺省 6*temperature ≈ 0.5×格点间距）
         eps: 过渡软硬（缺省 0.4*temperature）
 
     Returns:

@@ -132,7 +132,7 @@ R_g = sqrt( mean_{i<j in g} |s_i - s_j|^2 )     # 组内 RMS 互距
 | `distances` | (..., N) | 场点到各种子的距离 |
 | `seeds` | (N, dim) | 种子坐标，仅用于算融合权重 |
 | `group` | int | 每组种子数，必须整除 N；`1` 退化为 `soft_density` |
-| `delta0` | float | 融合尺度，缺省 `2*temperature` |
+| `delta0` | float | 融合尺度，缺省 `6*temperature`（≈0.5×配对图间距） |
 | `eps` | float | 过渡软硬，缺省 `0.4*temperature` |
 
 **实现细节：**
@@ -142,6 +142,9 @@ R_g = sqrt( mean_{i<j in g} |s_i - s_j|^2 )     # 组内 RMS 互距
   `sigmoid` 都解析，**组内两颗种子都拿到非零梯度**（硬 `min` 会让较远那颗梯度
   恒为 0，成为自由漂移的死变量）。
 - `w_g = 0` 时与原式**逐位一致**（实测 `max|Δrho| = 1.2e-7`，float32 精度）。
+- **δ0 必须与配对图的实际间距同量级**（不是与 T 同量级）：18×18 点阵标称间距 0.56 mm，
+  塌缩对 0.15 mm，健康对 0.37–0.56 mm ⇒ δ0≈0.5×间距（≈6T）可清晰区分；
+  δ0=2T 时 w≈σ(−15)≈0，机制不触发（实测 1T–16T 所有指标不变）。
 
 **相关函数：** `fusion_weight(seeds, group, delta0, eps)` 只返回每组权重 `(G,)`；
 `soft_density_fused(distances, beta, temperature, weight, group)` 接受外部给定的权重。

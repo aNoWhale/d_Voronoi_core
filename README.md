@@ -207,7 +207,7 @@ gradients.
 ```python
 from density import soft_density_grouped, soft_density_fused, fusion_weight
 
-# convenience wrapper (delta0 = 2T, eps = 0.4T by default)
+# convenience wrapper (delta0 = 6T ~ 0.5x the pairing-graph spacing)
 rho = soft_density_grouped(distances, seeds, beta=2.0, temperature=T,
                            group=2, delta0=2 * T, eps=0.4 * T)
 
@@ -217,7 +217,12 @@ rho = soft_density_fused(distances, beta=2.0, temperature=T, weight=w, group=2)
 ```
 
 `group` must divide the number of seeds. The partition is a **fixed index grouping**
-(not updated during iterations) — required for smoothness. With `group=1` or
+(not updated during iterations) — required for smoothness. `\delta_0` must be comparable
+to the **actual spacing of the pairing graph**, not to $T$: on an 18x18 lattice the nominal
+spacing is 0.56 mm, a collapsed pair sits at 0.15 mm, while healthy pairs stay at 0.37-0.56 mm,
+so $\delta_0\approx 0.5\times$ spacing ($\approx 6T$) separates them cleanly ($w\approx 0$ vs $w\approx 1$).
+With $\delta_0=2T$, $w\approx\sigma(-15)\approx 0$ and the mechanism barely fires (measured: every
+metric is unchanged for $\delta_0$ from $1T$ to $16T$). With `group=1` or
 `weight=None` the result equals `soft_density` exactly.
 Demo / self-test: `python demo/demo_fusion.py` (writes `demo/fusion_demo.png`).
 

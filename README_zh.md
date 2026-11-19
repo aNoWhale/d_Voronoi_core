@@ -201,7 +201,7 @@ $R_g\to 0$ 时 $C_g\to 1$，组内无材料（假壁消失），与外部仍给�
 ```python
 from density import soft_density_grouped, soft_density_fused, fusion_weight
 
-# 便捷封装（delta0 缺省 2T，eps 缺省 0.4T）
+# 便捷封装（delta0 缺省 6T ≈ 0.5×配对图间距，eps 缺省 0.4T）
 rho = soft_density_grouped(distances, seeds, beta=2.0, temperature=T,
                            group=2, delta0=2 * T, eps=0.4 * T)
 
@@ -211,7 +211,11 @@ rho = soft_density_fused(distances, beta=2.0, temperature=T, weight=w, group=2)
 ```
 
 注意：`group` 必须整除种子数；分组为**固定索引分组**（不随迭代变化），这是保持
-$C^{\infty}$ 的前提。`group=1` 或 `weight=None` 时逐位等于 `soft_density`。
+$C^{\infty}$ 的前提。`\delta_0` 应与**配对图的实际间距**同量级，而不是与 $T$ 同量级：
+以 18×18 点阵为例，标称间距 0.56 mm，塌缩到 0.15 mm 是该治的病，而健康对仍在 0.37–0.56 mm，
+故取 $\delta_0\approx 0.5\times$ 间距（$\approx 6T$）：健康对 $w\approx 0$、塌缩对 $w\approx 1$。
+取 $\delta_0=2T$ 时 $w\approx\sigma(-15)\approx 0$，机制几乎不触发（实测所有指标随 $\delta_0$
+从 $1T$ 扫到 $16T$ 完全不变）。`group=1` 或 `weight=None` 时逐位等于 `soft_density`。
 演示与自检：`python demo/demo_fusion.py`（输出 `demo/fusion_demo.png`）。
 
 ### Heaviside 投影（最后一步）
