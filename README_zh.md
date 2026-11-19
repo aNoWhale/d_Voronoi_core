@@ -169,6 +169,51 @@ $$soft_i = \frac{\exp(-d_i/T)}{\sum_j \exp(-d_j/T)}, \quad \rho = 1 - \sum_i sof
   - T = 1: 标准 softmax
 - **beta**: 边界锐度，保持在 2 或 2.66 附近（控制密度幂次）
 
+### 分组融合（Group Fusion，v0.6）
+
+$\rho = 1-\sum_i \mathrm{soft}_i^{\beta}$ 严格来说并非"覆盖率"，而是**竞争者个数**的函数：
+
+$$\sum_i \mathrm{soft}_i^{2}=\frac{1}{N_{\mathrm{eff}}},\qquad
+N_{\mathrm{eff}}=\frac{1}{\sum_i \mathrm{soft}_i^{2}},\qquad
+\rho = 1-N_{\mathrm{eff}}^{\,1-\beta}$$
+
+因此 2 颗种子等距时 $\rho=0.5$（$\eta=0.5$ 即出材料），$M$ 颗挤在 $\sim 2T$ 以内时
+$\rho\to 1$——局部种子簇会退化成一块**实心材料**。该退化与距离如何归一化无关
+（任何单调重标定都改不了 $N_{\mathrm{eff}}$），只能从"求和项数"上治。
+
+分组融合把"间距小于 $\delta_0$ 的种子组"视为同一特征，即距离场取并集。对覆盖率泛函，
+并集满足 $d_{A\cup B}=\min(d_A,d_B)\iff w_{A\cup B}=\mathrm{soft}_A+\mathrm{soft}_B$，故
+
+$$C_g=(1-w_g)\sum_{i\in g}\mathrm{soft}_i^{\beta}
++w_g\Big(\sum_{i\in g}\mathrm{soft}_i\Big)^{\beta},
+\qquad \rho = 1-\sum_g C_g$$
+
+$$w_g=\sigma\Big(\frac{\delta_0-R_g}{\varepsilon}\Big),\qquad
+R_g=\sqrt{\frac{1}{|\mathcal{P}_g|}\sum_{(i,j)\in\mathcal{P}_g}
+\|\mathbf{s}_i-\mathbf{s}_j\|^{2}}$$
+
+三条极限：$R_g\gg\delta_0$ 时 $w_g\to 0$，**逐位退化为原式**（不影响既有行为）；
+$R_g\to 0$ 时 $C_g\to 1$，组内无材料（假壁消失），与外部仍给出 $0.5$ 的正常壁；
+中间连续过渡。用 RMS 互距而非 $\max$、用求和而非 soft-min：$\max/\min$ 在一阶有折点，
+而 $\sum_i\mathrm{soft}_i$ 与 $\sigma$ 都解析，整条链 $C^{\infty}$，组内两颗种子都得到
+非零梯度。
+
+```python
+from density import soft_density_grouped, soft_density_fused, fusion_weight
+
+# 便捷封装（delta0 缺省 2T，eps 缺省 0.4T）
+rho = soft_density_grouped(distances, seeds, beta=2.0, temperature=T,
+                           group=2, delta0=2 * T, eps=0.4 * T)
+
+# 或分两步（自定权重）
+w = fusion_weight(seeds, group=2, delta0=2 * T, eps=0.4 * T)      # (G,)
+rho = soft_density_fused(distances, beta=2.0, temperature=T, weight=w, group=2)
+```
+
+注意：`group` 必须整除种子数；分组为**固定索引分组**（不随迭代变化），这是保持
+$C^{\infty}$ 的前提。`group=1` 或 `weight=None` 时逐位等于 `soft_density`。
+演示与自检：`python demo/demo_fusion.py`（输出 `demo/fusion_demo.png`）。
+
 ### Heaviside 投影（最后一步）
 
 $$\rho' = \frac{\tanh(\gamma\eta) + \tanh(\gamma(\rho-\eta))}{\tanh(\gamma\eta) + \tanh(\gamma(1-\eta))}$$
@@ -194,7 +239,7 @@ field_open = compute_voronoi(coords, seeds, D, beta=2.0, eta=0.55)
 ```
 d_Voronoi_core/
 ├── __init__.py      # 公共接口
-├── density.py       # soft_density, heaviside, compute_gamma
+├── density.py       # soft_density, soft_density_grouped/fused, fusion_weight, heaviside
 ├── distances.py     # mahalanobis, masked_mahalanobis
 ├── field.py         # compute_voronoi, make_voronoi_fn
 ├── utils.py         # generate_random_seeds, generate_identity_D

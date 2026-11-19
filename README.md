@@ -169,6 +169,58 @@ Where:
   - T = 1: Standard softmax
 - **beta**: Boundary sharpness, keep around 2 or 2.66 (controls density power)
 
+### Group Fusion (v0.6)
+
+Strictly speaking, $\rho = 1-\sum_i \mathrm{soft}_i^{\beta}$ is not a *coverage* but a
+function of the **number of competing seeds**:
+
+$$\sum_i \mathrm{soft}_i^{2}=\frac{1}{N_{\mathrm{eff}}},\qquad
+N_{\mathrm{eff}}=\frac{1}{\sum_i \mathrm{soft}_i^{2}},\qquad
+\rho = 1-N_{\mathrm{eff}}^{\,1-\beta}$$
+
+Hence two equidistant seeds give $\rho=0.5$ (material at $\eta=0.5$), and $M$ seeds
+packed within $\sim 2T$ drive $\rho\to 1$ — a local seed cluster degenerates into a
+**solid block**. No monotone rescaling of the distance can change this (it leaves
+$N_{\mathrm{eff}}$ invariant); the only cure is at the level of the **number of terms**.
+
+Group fusion treats a group of seeds whose mutual distance is below $\delta_0$ as a
+single feature, i.e. as the union of their distance fields. For the coverage functional
+the union satisfies $d_{A\cup B}=\min(d_A,d_B)\iff w_{A\cup B}=\mathrm{soft}_A+\mathrm{soft}_B$,
+therefore
+
+$$C_g=(1-w_g)\sum_{i\in g}\mathrm{soft}_i^{\beta}
++w_g\Big(\sum_{i\in g}\mathrm{soft}_i\Big)^{\beta},
+\qquad \rho = 1-\sum_g C_g$$
+
+$$w_g=\sigma\Big(\frac{\delta_0-R_g}{\varepsilon}\Big),\qquad
+R_g=\sqrt{\frac{1}{|\mathcal{P}_g|}\sum_{(i,j)\in\mathcal{P}_g}
+\|\mathbf{s}_i-\mathbf{s}_j\|^{2}}$$
+
+Limits: $R_g\gg\delta_0$ gives $w_g\to 0$ and reproduces the original formula
+**bit-for-bit**; $R_g\to 0$ gives $C_g\to 1$, i.e. no material inside the group (the
+spurious wall disappears) while a normal $0.5$ wall with the outside remains; the
+transition in between is continuous. RMS (not $\max$) and a sum (not a soft-min) are
+used because $\max/\min$ have first-order kinks, whereas the sum and $\sigma$ are
+analytic: the whole chain is $C^{\infty}$ and both seeds of a group receive non-zero
+gradients.
+
+```python
+from density import soft_density_grouped, soft_density_fused, fusion_weight
+
+# convenience wrapper (delta0 = 2T, eps = 0.4T by default)
+rho = soft_density_grouped(distances, seeds, beta=2.0, temperature=T,
+                           group=2, delta0=2 * T, eps=0.4 * T)
+
+# or two explicit steps
+w = fusion_weight(seeds, group=2, delta0=2 * T, eps=0.4 * T)      # (G,)
+rho = soft_density_fused(distances, beta=2.0, temperature=T, weight=w, group=2)
+```
+
+`group` must divide the number of seeds. The partition is a **fixed index grouping**
+(not updated during iterations) — required for smoothness. With `group=1` or
+`weight=None` the result equals `soft_density` exactly.
+Demo / self-test: `python demo/demo_fusion.py` (writes `demo/fusion_demo.png`).
+
 ### Heaviside Projection (Final Step)
 
 $$\rho' = \frac{\tanh(\gamma\eta) + \tanh(\gamma(\rho-\eta))}{\tanh(\gamma\eta) + \tanh(\gamma(1-\eta))}$$
@@ -194,7 +246,7 @@ field_open = compute_voronoi(coords, seeds, D, beta=2.0, eta=0.55)
 ```
 d_Voronoi_core/
 ├── __init__.py      # Public interface
-├── density.py       # soft_density, heaviside, compute_gamma
+├── density.py       # soft_density, soft_density_grouped/fused, fusion_weight, heaviside
 ├── distances.py     # mahalanobis, masked_mahalanobis
 ├── field.py         # compute_voronoi, make_voronoi_fn
 ├── utils.py         # generate_random_seeds, generate_identity_D
