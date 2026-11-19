@@ -9,6 +9,7 @@
 
 import jax
 import jax.numpy as np
+import numpy as onp   # 仅用于构造常量掩码/索引 (jax 的 bool 索引须为具体值)
 
 
 def soft_density(distances: np.ndarray, beta: float, temperature: float = 1.0) -> np.ndarray:
@@ -132,10 +133,10 @@ def group_ids(n_seeds: int, group: int) -> np.ndarray:
     固定分组是整条链保持光滑的前提 (数据驱动的动态聚类会在阈值处跳变)。
     """
     if group <= 1:
-        return np.arange(n_seeds)
+        return onp.arange(n_seeds)
     if n_seeds % group:
         raise ValueError(f'n_seeds={n_seeds} 不能被 group={group} 整除')
-    return np.repeat(np.arange(n_seeds // group), group)
+    return onp.repeat(onp.arange(n_seeds // group), group)
 
 
 def fusion_weight(seeds: np.ndarray, group: int, delta0: float,
@@ -156,7 +157,8 @@ def fusion_weight(seeds: np.ndarray, group: int, delta0: float,
     s = seeds.reshape(-1, group, seeds.shape[-1])
     diff = s[:, :, None, :] - s[:, None, :, :]
     d2 = np.sum(diff ** 2, axis=-1)                       # (G, group, group)
-    iu = np.triu(np.ones((group, group), bool), 1)        # 上三角 → 无序对
+    iu = onp.triu(onp.ones((group, group), bool), 1)     # 上三角 → 无序对 (须为具体 bool)
+    iu = onp.asarray(iu)
     rms = np.sqrt(np.maximum(np.mean(d2[:, iu], axis=-1), 0.0))
     return jax.nn.sigmoid((delta0 - rms) / eps)
 

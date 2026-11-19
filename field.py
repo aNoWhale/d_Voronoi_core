@@ -20,7 +20,7 @@ from functools import partial
 import jax
 import jax.numpy as np
 
-from density import soft_density, heaviside
+from density import soft_density, soft_density_fused, fusion_weight, heaviside
 from distances import mahalanobis_single, masked_mahalanobis_single, masked_mahalanobis_single_by_angle
 
 
@@ -28,7 +28,7 @@ from distances import mahalanobis_single, masked_mahalanobis_single, masked_maha
 # 核心计算函数（JIT 优化）
 # =============================================================================
 
-@partial(jax.jit, static_argnums=(3, 4, 5, 6))
+@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8, 9))
 def _compute_unit_density_basic(
     unit: np.ndarray,
     seeds: np.ndarray,
@@ -36,14 +36,25 @@ def _compute_unit_density_basic(
     beta: float,
     sigma: float,
     scale: float,
-    temperature: float = 1.0
+    temperature: float = 1.0,
+    group: int = 1,
+    delta0: float = 0.0,
+    eps: float = 0.0
 ) -> np.ndarray:
-    """计算单点的 Voronoi 密度（基本版本：马氏距离）"""
+    """计算单点的 Voronoi 密度（基本版本：马氏距离）。
+
+    group>1 时启用分组融合: 把间距 < delta0 的种子组视为同一特征（距离场取并集），
+    消除"两颗种子靠得太近 → 一整块实心材料"的退化。权重由 seeds 现场计算,
+    因此对 seeds 可微且不会触发重编译。
+    """
     dist = mahalanobis_single(unit, seeds, D)
-    return soft_density(dist, beta, temperature)
+    if group <= 1:
+        return soft_density(dist, beta, temperature)
+    w = fusion_weight(seeds, group, delta0, eps)
+    return soft_density_fused(dist, beta, temperature, weight=w, group=group)
 
 
-@partial(jax.jit, static_argnums=(4, 5, 6, 7))
+@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
 def _compute_unit_density_with_cp(
     unit: np.ndarray,
     seeds: np.ndarray,
@@ -52,14 +63,20 @@ def _compute_unit_density_with_cp(
     beta: float,
     sigma: float,
     scale: float,
-    temperature: float = 1.0
+    temperature: float = 1.0,
+    group: int = 1,
+    delta0: float = 0.0,
+    eps: float = 0.0
 ) -> np.ndarray:
     """计算单点的 Voronoi 密度（带控制点）"""
     dist = masked_mahalanobis_single(unit, seeds, D, cp, sigma, scale)
-    return soft_density(dist, beta, temperature)
+    if group <= 1:
+        return soft_density(dist, beta, temperature)
+    w = fusion_weight(seeds, group, delta0, eps)
+    return soft_density_fused(dist, beta, temperature, weight=w, group=group)
 
 
-@partial(jax.jit, static_argnums=(4, 5, 6, 7))
+@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
 def _compute_unit_density_with_angle(
     unit: np.ndarray,
     seeds: np.ndarray,
@@ -68,11 +85,17 @@ def _compute_unit_density_with_angle(
     beta: float,
     sigma: float,
     scale: float,
-    temperature: float = 1.0
+    temperature: float = 1.0,
+    group: int = 1,
+    delta0: float = 0.0,
+    eps: float = 0.0
 ) -> np.ndarray:
     """计算单点的 Voronoi 密度（带角度参数）"""
     dist = masked_mahalanobis_single_by_angle(unit, seeds, D, angle, sigma, scale)
-    return soft_density(dist, beta, temperature)
+    if group <= 1:
+        return soft_density(dist, beta, temperature)
+    w = fusion_weight(seeds, group, delta0, eps)
+    return soft_density_fused(dist, beta, temperature, weight=w, group=group)
 
 
 # =============================================================================
@@ -90,7 +113,10 @@ def voronoi_field(
     temperature: float = 1.0,
     batch_size: int = 20,
     angle: Optional[np.ndarray] = None,
-    topk: int = 0                     # >0 时启用 top-k (角度遮罩仅算最近 k 种子)
+    topk: int = 0,                    # >0 时启用 top-k (角度遮罩仅算最近 k 种子)
+    group: int = 1,                   # >1 时启用分组融合 (见 density.soft_density_fused)
+    delta0: float = 0.0,              # 融合尺度, 缺省 2*temperature
+    eps: float = 0.0                  # 过渡软硬, 缺省 0.4*temperature
 ) -> np.ndarray:
     """
     计算 Voronoi 场（支持批处理和多设备）
@@ -110,6 +136,9 @@ def voronoi_field(
             - T > 1: 分布更分散，边界更平滑
             - T = 1: 标准 softmax
         batch_size: 批处理大小
+        group: 每组种子数（>1 时启用分组融合；必须整除 N）
+        delta0: 融合尺度（缺省 2*temperature）
+        eps: 过渡软硬（缺省 0.4*temperature）
 
     Returns:
         密度场，形状 (Nx, Ny)
@@ -126,15 +155,15 @@ def voronoi_field(
         vectorized = jax.vmap(compute_fn, in_axes=(0, None, None, None))
         extra_arg = angle
     elif angle is not None:
-        compute_fn = partial(_compute_unit_density_with_angle, beta=beta, sigma=sigma, scale=scale, temperature=temperature)
+        compute_fn = partial(_compute_unit_density_with_angle, beta=beta, sigma=sigma, scale=scale, temperature=temperature, group=group, delta0=delta0, eps=eps)
         vectorized = jax.vmap(compute_fn, in_axes=(0, None, None, None))
         extra_arg = angle
     elif cp is not None:
-        compute_fn = partial(_compute_unit_density_with_cp, beta=beta, sigma=sigma, scale=scale, temperature=temperature)
+        compute_fn = partial(_compute_unit_density_with_cp, beta=beta, sigma=sigma, scale=scale, temperature=temperature, group=group, delta0=delta0, eps=eps)
         vectorized = jax.vmap(compute_fn, in_axes=(0, None, None, None))
         extra_arg = cp
     else:
-        compute_fn = partial(_compute_unit_density_basic, beta=beta, sigma=sigma, scale=scale, temperature=temperature)
+        compute_fn = partial(_compute_unit_density_basic, beta=beta, sigma=sigma, scale=scale, temperature=temperature, group=group, delta0=delta0, eps=eps)
         vectorized = jax.vmap(compute_fn, in_axes=(0, None, None))
         extra_arg = None
 
@@ -190,7 +219,10 @@ def compute_voronoi(
     gamma: float = 1.0,
     batch_size: int = 20,
     angle: Optional[np.ndarray] = None,
-    topk: int = 0
+    topk: int = 0,
+    group: int = 1,
+    delta0: float = 0.0,
+    eps: float = 0.0
 ) -> np.ndarray:
     """
     计算 Voronoi 场
@@ -223,12 +255,17 @@ def compute_voronoi(
         angle: 方向角度参数，形状 (N,)，可选
             - 传入时直接使用角度定义方向，无需控制点坐标
             - 优先级高于 cp
+        group: 每组种子数（>1 时启用分组融合）
+        delta0: 融合尺度（缺省 2*temperature）
+        eps: 过渡软硬（缺省 0.4*temperature）
 
     Returns:
         密度场，形状 (Nx, Ny)
     """
     # 步骤1-2: 计算连续场
-    field = voronoi_field(coords, seeds, D, cp, beta, sigma, scale, temperature, batch_size, angle, topk)
+    field = voronoi_field(coords, seeds, D, cp, beta, sigma, scale,
+                          temperature, batch_size, angle, topk,
+                          group=group, delta0=delta0, eps=eps)
 
     # 步骤3: Heaviside 投影（最后一步）
     if gamma > 1.0:
@@ -258,7 +295,7 @@ def make_voronoi_fn(
         batch_size: 批处理大小
 
     Returns:
-        voronoi_fn(coords, seeds, D, cp=None, temperature=1.0, eta=0.5, gamma=1.0, angle=None)
+        voronoi_fn(coords, seeds, D, cp=None, temperature=1.0, eta=0.5, gamma=1.0, angle=None, topk=0, group=1, delta0=0.0, eps=0.0)
 
     Example:
         >>> # 欧几里得距离（D=I），标准温度
@@ -283,7 +320,11 @@ def make_voronoi_fn(
         temperature: float = 1.0,
         eta: float = 0.5,
         gamma: float = 1.0,
-        angle: Optional[np.ndarray] = None
+        angle: Optional[np.ndarray] = None,
+        topk: int = 0,
+        group: int = 1,
+        delta0: float = 0.0,
+        eps: float = 0.0
     ) -> np.ndarray:
         return compute_voronoi(
             coords, seeds, D, cp,
@@ -292,7 +333,8 @@ def make_voronoi_fn(
             eta=eta, gamma=gamma,
             batch_size=batch_size,
             angle=angle,
-            topk=topk
+            topk=topk,
+            group=group, delta0=delta0, eps=eps
         )
     return voronoi_fn
 
