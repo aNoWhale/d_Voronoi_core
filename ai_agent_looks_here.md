@@ -119,7 +119,7 @@ C_g = (1 - w_g) * A_g + w_g * B_g
 rho = 1 - sum_g C_g
 
 w_g = sigmoid( (delta0 - R_g) / eps )
-R_g = sqrt( mean_{i<j in g} |s_i - s_j|^2 )     # 组内 RMS 互距
+R_g = softmin_{i<j in g} |s_i - s_j|          # 组内**最小**互距 (软min, 温度 eps)
 ```
 
 并集恒等式：`d_{A∪B} = min(d_A, d_B)` ⇔ `w_{A∪B} = soft_A + soft_B`。两子重合时
@@ -138,7 +138,9 @@ R_g = sqrt( mean_{i<j in g} |s_i - s_j|^2 )     # 组内 RMS 互距
 **实现细节：**
 - **固定索引分组**（不随迭代变化）——这是整条链保持 C^∞ 的前提；数据驱动的动态
   聚类会在阈值处跳变。
-- 用 RMS 互距而非 `max`、用求和而非 soft-min：`max/min` 在一阶有折点，而求和与
+- $R_g$ 必须用组内**最小**互距（softmin），不能用 RMS：RMS 随组变大而变大，
+  会导致"组越大越不触发"（实测 group=2→12 全不触发）。组大小也要够（group=2 治不了 ≥4 的簇）。
+- 用 softmin 而非 `max`、用求和而非 soft-min：`max/min` 在一阶有折点，而求和与
   `sigmoid` 都解析，**组内两颗种子都拿到非零梯度**（硬 `min` 会让较远那颗梯度
   恒为 0，成为自由漂移的死变量）。
 - `w_g = 0` 时与原式**逐位一致**（实测 `max|Δrho| = 1.2e-7`，float32 精度）。

@@ -189,8 +189,20 @@ $$C_g=(1-w_g)\sum_{i\in g}\mathrm{soft}_i^{\beta}
 \qquad \rho = 1-\sum_g C_g$$
 
 $$w_g=\sigma\Big(\frac{\delta_0-R_g}{\varepsilon}\Big),\qquad
-R_g=\sqrt{\frac{1}{|\mathcal{P}_g|}\sum_{(i,j)\in\mathcal{P}_g}
-\|\mathbf{s}_i-\mathbf{s}_j\|^{2}}$$
+R_g=\operatorname{softmin}_{(i,j)\in\mathcal{P}_g}\|\mathbf{s}_i-\mathbf{s}_j\|$$
+
+$R_g$ 取组内**最小**互距（softmin，温度 $\varepsilon$）：组内只要有一对退化，整组即视为
+同一特征。**不能用 RMS**——组越大跨胞越多、RMS 越大，$w_g$ 反而越小，实测 group 从 2 加到 12
+会出现"组越大越不触发"。组大小也要够大（$2$ 治不了 $\ge4$ 的簇：并完还剩两项，彼此仍退化）。
+在 18×18 点阵的终态种子上实测（$\delta_0=6T$）：
+
+| group | w 均值 | duty | 壁 p95 | 最大实心块 |
+|---|---|---|---|---|
+| 2 | 0.055 | 0.246 | 1349 µm | 5.00 mm |
+| 4 | 0.285 | 0.220 | 895 µm | 4.67 mm |
+| 6 | 0.372 | 0.194 | 731 µm | 3.95 mm |
+| **9** | **0.489** | 0.170 | **526 µm** | **2.82 mm** |
+| 12 | 0.561 | 0.167 | 659 µm | 2.73 mm |
 
 三条极限：$R_g\gg\delta_0$ 时 $w_g\to 0$，**逐位退化为原式**（不影响既有行为）；
 $R_g\to 0$ 时 $C_g\to 1$，组内无材料（假壁消失），与外部仍给出 $0.5$ 的正常壁；

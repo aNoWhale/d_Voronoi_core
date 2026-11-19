@@ -141,7 +141,11 @@ def group_ids(n_seeds: int, group: int) -> np.ndarray:
 
 def fusion_weight(seeds: np.ndarray, group: int, delta0: float,
                   eps: float) -> np.ndarray:
-    """每组的融合权重 w_g in (0,1): 组内互距远小于 delta0 -> 1 (取并集)。
+    """每组的融合权重 w_g in (0,1): 组内**最小**互距小于 delta0 -> 1 (取并集)。
+
+    语义: 组内只要有一对种子塌到 delta0 以内, 整组就视为同一个特征 (距离场取并集),
+    从而消除"簇 -> 一整块实心材料"的退化。用 softmin 而非 RMS: RMS 会随组变大而变大,
+    导致"组越大越不触发" (方向相反)。
 
     Args:
         seeds: (N, dim) 种子坐标
@@ -158,9 +162,11 @@ def fusion_weight(seeds: np.ndarray, group: int, delta0: float,
     diff = s[:, :, None, :] - s[:, None, :, :]
     d2 = np.sum(diff ** 2, axis=-1)                       # (G, group, group)
     iu = onp.triu(onp.ones((group, group), bool), 1)     # 上三角 → 无序对 (须为具体 bool)
-    iu = onp.asarray(iu)
-    rms = np.sqrt(np.maximum(np.mean(d2[:, iu], axis=-1), 0.0))
-    return jax.nn.sigmoid((delta0 - rms) / eps)
+    pair = np.sqrt(np.maximum(d2[:, onp.asarray(iu)], 0.0))   # (G, n_pair)
+    # 组内**最小**互距 (softmin, 温度取 eps): 只要有一对退化, 整组视为同一特征。
+    # 用 RMS 会得到相反的行为 —— 组越大 RMS 越大, w 越小 (实测 group=2..12 全不触发)。
+    rmin = -eps * np.log(np.mean(np.exp(-pair / eps), axis=-1) + 1e-30)
+    return jax.nn.sigmoid((delta0 - rmin) / eps)
 
 
 def soft_density_fused(distances: np.ndarray, beta: float, temperature: float = 1.0,

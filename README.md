@@ -193,8 +193,22 @@ $$C_g=(1-w_g)\sum_{i\in g}\mathrm{soft}_i^{\beta}
 \qquad \rho = 1-\sum_g C_g$$
 
 $$w_g=\sigma\Big(\frac{\delta_0-R_g}{\varepsilon}\Big),\qquad
-R_g=\sqrt{\frac{1}{|\mathcal{P}_g|}\sum_{(i,j)\in\mathcal{P}_g}
-\|\mathbf{s}_i-\mathbf{s}_j\|^{2}}$$
+R_g=\operatorname{softmin}_{(i,j)\in\mathcal{P}_g}\|\mathbf{s}_i-\mathbf{s}_j\|$$
+
+$R_g$ is the **minimum** pairwise distance inside the group (softmin at temperature
+$\varepsilon$): one degenerate pair merges the whole group. **Do not use the RMS** — a larger
+group spans more cells, so the RMS grows and $w_g$ *decreases*; measured, going from $group=2$
+to $12$ makes the fusion fire less, not more. The group must also be large enough ($2$ cannot
+fix a cluster of $\ge4$: two merged terms are still mutually degenerate). Measured on the final
+seeds of an 18x18 run ($\delta_0=6T$):
+
+| group | w 均值 | duty | 壁 p95 | 最大实心块 |
+|---|---|---|---|---|
+| 2 | 0.055 | 0.246 | 1349 µm | 5.00 mm |
+| 4 | 0.285 | 0.220 | 895 µm | 4.67 mm |
+| 6 | 0.372 | 0.194 | 731 µm | 3.95 mm |
+| **9** | **0.489** | 0.170 | **526 µm** | **2.82 mm** |
+| 12 | 0.561 | 0.167 | 659 µm | 2.73 mm |
 
 Limits: $R_g\gg\delta_0$ gives $w_g\to 0$ and reproduces the original formula
 **bit-for-bit**; $R_g\to 0$ gives $C_g\to 1$, i.e. no material inside the group (the
