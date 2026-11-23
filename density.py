@@ -139,8 +139,35 @@ def group_ids(n_seeds: int, group: int) -> np.ndarray:
     return onp.repeat(onp.arange(n_seeds // group), group)
 
 
+def block_perm(n_sx: int, n_sy: int, bx: int = 2, by: int = 2) -> onp.ndarray:
+    """2D 紧凑块的固定置换: 使 (bx×by) 块的成员在置换后**连续**。
+
+    索引约定 k = i*n_sy + j (meshgrid indexing='ij' + ravel, j 变化最快)。
+    返回 perm, 满足 `seeds[perm]` 的连续 group 段 = 空间上的 (bx×by) 块。
+    置换只依赖网格形状 (与种子坐标无关) -> 是常量, gather 可微, 整条链仍 C^∞。
+
+    用法:
+        perm = block_perm(18, 18, 2, 2)
+        w    = fusion_weight(seeds[perm], group=4, delta0=..., eps=...)
+        rho  = soft_density_fused(soft[..., perm], ...)   # 或直接传 grid=
+    """
+    if n_sx % bx or n_sy % by:
+        raise ValueError(f'网格 {n_sx}x{n_sy} 不能被块 {bx}x{by} 整除')
+    k = onp.arange(n_sx * n_sy)
+    i, j = k // n_sy, k % n_sy
+    bid = (i // bx) * (n_sy // by) + (j // by)          # 块编号
+    within = (i % bx) * by + (j % by)                   # 块内序号
+    return onp.argsort(bid * (bx * by) + within).astype(onp.int64)
+
+
 def fusion_weight(seeds: np.ndarray, group: int, delta0: float,
-                  eps: float) -> np.ndarray:
+                  eps: float, grid=None) -> np.ndarray:
+    """grid=(n_sx,n_sy) 时按 2D 块 (bx=by=sqrt(group)) 分组, 否则按连续索引。"""
+    if grid is not None and group > 1:
+        n = int(onp.sqrt(group))
+        if n * n != group:
+            raise ValueError(f'2D 块要求 group 是完全平方数, 得到 {group}')
+        seeds = seeds[block_perm(grid[0], grid[1], n, n)]
     """每组的融合权重 w_g in (0,1): 组内**最小**互距小于 delta0 -> 1 (取并集)。
 
     语义: 组内只要有一对种子塌到 delta0 以内, 整组就视为同一个特征 (距离场取并集),
@@ -170,7 +197,14 @@ def fusion_weight(seeds: np.ndarray, group: int, delta0: float,
 
 
 def soft_density_fused(distances: np.ndarray, beta: float, temperature: float = 1.0,
-                       weight: np.ndarray = None, group: int = 1) -> np.ndarray:
+                       weight: np.ndarray = None, group: int = 1,
+                       grid=None) -> np.ndarray:
+    """grid=(n_sx,n_sy) 时按 2D 块分组 (需先对 distances 最后一维做同样置换)。"""
+    if grid is not None and group > 1:
+        n = int(onp.sqrt(group))
+        if n * n != group:
+            raise ValueError(f'2D 块要求 group 是完全平方数, 得到 {group}')
+        distances = distances[..., block_perm(grid[0], grid[1], n, n)]
     """带分组融合的软 Voronoi 密度。
 
     Args:
@@ -203,7 +237,8 @@ def soft_density_fused(distances: np.ndarray, beta: float, temperature: float = 
 
 def soft_density_grouped(distances: np.ndarray, seeds: np.ndarray, beta: float,
                          temperature: float = 1.0, group: int = 2,
-                         delta0: float = None, eps: float = None) -> np.ndarray:
+                         delta0: float = None, eps: float = None,
+                         grid=None) -> np.ndarray:
     """便捷封装: 由种子坐标自动算融合权重再求密度。
 
     delta0 缺省 6*temperature (≈0.5x 配对图间距; 2T 实测几乎不触发), eps 缺省 0.4*temperature。
@@ -214,5 +249,9 @@ def soft_density_grouped(distances: np.ndarray, seeds: np.ndarray, beta: float,
         eps = 0.4 * temperature
     if group <= 1:
         return soft_density_fused(distances, beta, temperature)
+    if grid is not None and group > 1:
+        n = int(onp.sqrt(group))
+        perm = block_perm(grid[0], grid[1], n, n)
+        seeds, distances = seeds[perm], distances[..., perm]
     w = fusion_weight(seeds, group, delta0, eps)
     return soft_density_fused(distances, beta, temperature, weight=w, group=group)

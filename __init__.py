@@ -17,6 +17,7 @@ from density import (
     soft_density_grouped,
     fusion_weight,
     group_ids,
+    block_perm,
     compute_gamma,
     heaviside
 )
@@ -54,6 +55,7 @@ __all__ = [
     "soft_density_grouped",
     "fusion_weight",
     "group_ids",
+    "block_perm",
     "compute_gamma",
     "heaviside",
 
